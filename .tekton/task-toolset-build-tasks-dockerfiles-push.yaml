@@ -29,6 +29,9 @@ spec:
     value: '{{revision}}'
   - name: hermetic
     value: "true"
+  - name: prefetch-input
+    value: |
+      {"type": "rpm", "path": "task-toolset"}
   pipelineSpec:
     finally:
     - name: show-sbom
