@@ -32,6 +32,8 @@ spec:
   - name: prefetch-input
     value: |
       {"type": "rpm", "path": "task-toolset"}
+  - name: build-source-image
+    value: "true"
   pipelineSpec:
     finally:
     - name: show-sbom
