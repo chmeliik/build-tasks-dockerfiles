@@ -27,6 +27,13 @@ spec:
     value: task-toolset
   - name: revision
     value: '{{revision}}'
+  - name: hermetic
+    value: "true"
+  - name: prefetch-input
+    value: |
+      {"type": "rpm", "path": "task-toolset"}
+  - name: build-source-image
+    value: "true"
   pipelineSpec:
     finally:
     - name: show-sbom
@@ -178,6 +185,8 @@ spec:
       params:
       - name: input
         value: $(params.prefetch-input)
+      - name: dev-package-managers
+        value: "true"
       runAfter:
       - clone-repository
       taskRef:
