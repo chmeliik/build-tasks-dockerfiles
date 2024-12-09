@@ -1,23 +1,52 @@
 #!/usr/bin/env python3
 import json
 from argparse import ArgumentParser
-from typing import Any, Callable
+from dataclasses import dataclass
+from typing import Any, Callable, Protocol, Sequence
 from urllib.parse import quote_plus, urlsplit
 
 
-def _is_syft_local_golang_component(component: dict) -> bool:
+class SBOMItem(Protocol):
+    def name(self) -> str: ...
+    def version(self) -> str: ...
+    def purl(self) -> str: ...
+
+
+@dataclass
+class CDXComponent:
+    data: dict[str, Any]
+
+    def name(self) -> str:
+        return self.data["name"]
+
+    def version(self) -> str:
+        return self.data.get("version") or ""
+
+    def purl(self) -> str:
+        return self.data.get("purl") or ""
+
+
+def wrap_as_cdx(items: list[dict[str, Any]]) -> list[CDXComponent]:
+    return list(map(CDXComponent, items))
+
+
+def unwrap_from_cdx(items: list[CDXComponent]) -> list[dict[str, Any]]:
+    return [c.data for c in items]
+
+
+def _is_syft_local_golang_component(component: SBOMItem) -> bool:
     """
     Check if a Syft Golang reported component is a local replacement.
 
     Local replacements are reported in a very different way by Cachi2, which is why the same
     reports by Syft should be removed.
     """
-    return component.get("purl", "").startswith("pkg:golang") and (
-        component.get("name", "").startswith(".") or component.get("version", "") == "(devel)"
+    return component.purl().startswith("pkg:golang") and (
+        component.name().startswith(".") or component.version() == "(devel)"
     )
 
 
-def _is_cachi2_non_registry_dependency(component: dict) -> bool:
+def _is_cachi2_non_registry_dependency(component: SBOMItem) -> bool:
     """
     Check if Cachi2 component was fetched from a VCS or a direct file location.
 
@@ -30,14 +59,14 @@ def _is_cachi2_non_registry_dependency(component: dict) -> bool:
 
     Note that this function is only applicable for PyPI or NPM components.
     """
-    purl = component.get("purl", "")
+    purl = component.purl()
 
     return (purl.startswith("pkg:pypi") or purl.startswith("pkg:npm")) and (
         "vcs_url=" in purl or "download_url=" in purl
     )
 
 
-def _unique_key_cachi2(component: dict) -> str:
+def _unique_key_cachi2(component: SBOMItem) -> str:
     """
     Create a unique key from Cachi2 reported components.
 
@@ -45,11 +74,11 @@ def _unique_key_cachi2(component: dict) -> str:
 
     See https://github.com/package-url/purl-spec/tree/master#purl for more info on purls.
     """
-    url = urlsplit(component["purl"])
+    url = urlsplit(component.purl())
     return url.scheme + ":" + url.path
 
 
-def _unique_key_syft(component: dict) -> str:
+def _unique_key_syft(component: SBOMItem) -> str:
     """
     Create a unique key for Syft reported components.
 
@@ -60,11 +89,11 @@ def _unique_key_syft(component: dict) -> str:
 
     If a Syft component lacks a purl (e.g. type OS), we'll use its name and version instead.
     """
-    if "purl" not in component:
-        return component.get("name", "") + "@" + component.get("version", "")
+    if not component.purl():
+        return component.name() + "@" + component.version()
 
-    if "@" in component["purl"]:
-        name, version = component["purl"].split("@")
+    if "@" in component.purl():
+        name, version = component.purl().split("@")
 
         if name.startswith("pkg:pypi"):
             name = name.lower()
@@ -74,10 +103,10 @@ def _unique_key_syft(component: dict) -> str:
 
         return f"{name}@{version}"
     else:
-        return component["purl"]
+        return component.purl()
 
 
-def _get_syft_component_filter(cachi_sbom_components: list[dict[str, Any]]) -> Callable:
+def _get_syft_component_filter(cachi_sbom_components: Sequence[SBOMItem]) -> Callable[[SBOMItem], bool]:
     """
     Get a function that filters out Syft components for the merged SBOM.
 
@@ -94,15 +123,15 @@ def _get_syft_component_filter(cachi_sbom_components: list[dict[str, Any]]) -> C
     given that it scans all the source code properly and the image is built hermetically.
     """
     cachi2_non_registry_components = [
-        component["name"] for component in cachi_sbom_components if _is_cachi2_non_registry_dependency(component)
+        component.name() for component in cachi_sbom_components if _is_cachi2_non_registry_dependency(component)
     ]
 
     cachi2_indexed_components = {_unique_key_cachi2(component): component for component in cachi_sbom_components}
 
-    def is_duplicate_non_registry_component(component: dict[str, Any]) -> bool:
-        return component["name"] in cachi2_non_registry_components
+    def is_duplicate_non_registry_component(component: SBOMItem) -> bool:
+        return component.name() in cachi2_non_registry_components
 
-    def component_is_duplicated(component: dict[str, Any]) -> bool:
+    def component_is_duplicated(component: SBOMItem) -> bool:
         key = _unique_key_syft(component)
 
         return (
@@ -148,6 +177,13 @@ def _merge_tools_metadata(syft_sbom: dict[Any, Any], cachi2_sbom: dict[Any, Any]
         )
 
 
+def merge_components[T: SBOMItem](cachi2_components: Sequence[T], syft_components: Sequence[T]) -> list[T]:
+    is_duplicate_component = _get_syft_component_filter(cachi2_components)
+    merged = [c for c in syft_components if not is_duplicate_component(c)]
+    merged += cachi2_components
+    return merged
+
+
 def merge_sboms(cachi2_sbom_path: str, syft_sbom_path: str) -> str:
     """Merge Cachi2 components into the Syft SBOM while removing duplicates."""
     with open(cachi2_sbom_path) as file:
@@ -156,11 +192,11 @@ def merge_sboms(cachi2_sbom_path: str, syft_sbom_path: str) -> str:
     with open(syft_sbom_path) as file:
         syft_sbom = json.load(file)
 
-    is_duplicate_component = _get_syft_component_filter(cachi2_sbom["components"])
+    cachi2_components = wrap_as_cdx(cachi2_sbom["components"])
+    syft_components = wrap_as_cdx(syft_sbom.get("components", []))
+    merged = merge_components(cachi2_components, syft_components)
 
-    filtered_syft_components = [c for c in syft_sbom.get("components", []) if not is_duplicate_component(c)]
-
-    syft_sbom["components"] = filtered_syft_components + cachi2_sbom["components"]
+    syft_sbom["components"] = unwrap_from_cdx(merged)
 
     _merge_tools_metadata(syft_sbom, cachi2_sbom)
 
