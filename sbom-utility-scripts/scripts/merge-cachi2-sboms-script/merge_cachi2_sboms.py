@@ -46,6 +46,36 @@ def unwrap_from_cdx(items: list[CDXComponent]) -> list[dict[str, Any]]:
     return [c.data for c in items]
 
 
+@dataclass
+class SPDXPackage:
+    data: dict[str, Any]
+
+    def spdxid(self) -> str:
+        return self.data["SPDXID"]
+
+    def name(self) -> str:
+        return self.data["name"]
+
+    def version(self) -> str:
+        return self.data.get("versionInfo") or ""
+
+    def purl(self) -> PackageURL | None:
+        purls = [
+            ref["referenceLocator"] for ref in self.data.get("externalRefs") or [] if ref["referenceType"] == "purl"
+        ]
+        if len(purls) > 1:
+            raise ValueError(f"Found {len(purls)} for a single SPDX package, this is unsupported: {purls}")
+        return try_parse_purl(purls[0]) if purls else None
+
+
+def wrap_as_spdx(items: list[dict[str, Any]]) -> list[SPDXPackage]:
+    return list(map(SPDXPackage, items))
+
+
+def unwrap_from_spdx(items: list[SPDXPackage]) -> list[dict[str, Any]]:
+    return [c.data for c in items]
+
+
 def _subpath_is_version(subpath: str) -> bool:
     # pkg:golang/github.com/cachito-testing/gomod-pandemonium@v0.0.0#terminaltor -> subpath is a subpath
     # pkg:golang/github.com/cachito-testing/retrodep@v2.1.1#v2 -> subpath is a version. Thanks, Syft.
@@ -226,13 +256,83 @@ def merge_components[T: SBOMItem](cachi2_components: Sequence[T], syft_component
 
 
 def merge_cyclonedx_sboms(cachi2_sbom: dict[str, Any], syft_sbom: dict[str, Any]) -> dict[str, Any]:
-    """Merge the data from the cachi2 SBOM into the Syft SBOM."""
+    """Merge the data from the cachi2 CycloneDX SBOM into the Syft CycloneDX SBOM."""
     cachi2_components = wrap_as_cdx(cachi2_sbom["components"])
     syft_components = wrap_as_cdx(syft_sbom.get("components", []))
     merged_components = merge_components(cachi2_components, syft_components)
 
     merged_sbom = syft_sbom | {"components": unwrap_from_cdx(merged_components)}
     _merge_tools_metadata(merged_sbom, cachi2_sbom)
+    return merged_sbom
+
+
+def _merge_spdx_creation_info(
+    cachi2_creation_info: dict[str, Any], syft_creation_info: dict[str, Any]
+) -> dict[str, Any]:
+    creation_info = syft_creation_info.copy()
+    creation_info["creators"].extend(cachi2_creation_info["creators"])
+    return creation_info
+
+
+def _merge_spdx_relationships(
+    cachi2_relationships: list[dict[str, Any]],
+    syft_relationships: list[dict[str, Any]],
+    replace_spdxid: Callable[[str], str | None],
+) -> list[dict[str, Any]]:
+    """Merge two lists of SPDX relationships.
+
+    Modify relationships according to the replace_spdxid function. Given an SPDXID, it can return:
+    - the same SPDXID (relationship is unchanged)
+    - a different SPDXID (relationship is updated)
+    - None (relationship is dropped)
+    """
+    merged_relationships = []
+
+    for relationship in syft_relationships + cachi2_relationships:
+        element = replace_spdxid(relationship["spdxElementId"])
+        related_element = replace_spdxid(relationship["relatedSpdxElement"])
+
+        if element and related_element:
+            merged_relationships.append(
+                relationship | {"spdxElementId": element, "relatedSpdxElement": related_element}
+            )
+
+    return merged_relationships
+
+
+def merge_spdx_sboms(cachi2_sbom: dict[str, Any], syft_sbom: dict[str, Any]) -> dict[str, Any]:
+    """Merge the data from the cachi2 SPDX SBOM into the Syft SPDX SBOM."""
+    cachi2_packages = wrap_as_spdx(cachi2_sbom.get("packages", []))
+    syft_packages = wrap_as_spdx(syft_sbom.get("packages", []))
+
+    merged_packages = merge_components(cachi2_packages, syft_packages)
+    merged_packages_by_id = {p.spdxid(): p for p in merged_packages}
+
+    def replace_spdxid(spdxid: str) -> str | None:
+        if spdxid == cachi2_sbom["SPDXID"]:
+            # The merged document can only have one SPDXID, keep the Syft one
+            return syft_sbom["SPDXID"]
+        if spdxid == syft_sbom["SPDXID"] or spdxid in merged_packages_by_id:
+            # Unchanged
+            return spdxid
+        # Drop
+        return None
+
+    merged_relationships = _merge_spdx_relationships(
+        cachi2_sbom.get("relationships", []),
+        syft_sbom.get("relationships", []),
+        replace_spdxid=replace_spdxid,
+    )
+    merged_creation_info = _merge_spdx_creation_info(
+        cachi2_sbom["creationInfo"],
+        syft_sbom["creationInfo"],
+    )
+
+    merged_sbom = syft_sbom | {
+        "packages": unwrap_from_spdx(merged_packages),
+        "relationships": merged_relationships,
+        "creationInfo": merged_creation_info,
+    }
     return merged_sbom
 
 
