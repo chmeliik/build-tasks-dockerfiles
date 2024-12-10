@@ -225,6 +225,17 @@ def merge_components[T: SBOMItem](cachi2_components: Sequence[T], syft_component
     return merged
 
 
+def merge_cyclonedx_sboms(cachi2_sbom: dict[str, Any], syft_sbom: dict[str, Any]) -> dict[str, Any]:
+    """Merge the data from the cachi2 SBOM into the Syft SBOM."""
+    cachi2_components = wrap_as_cdx(cachi2_sbom["components"])
+    syft_components = wrap_as_cdx(syft_sbom.get("components", []))
+    merged_components = merge_components(cachi2_components, syft_components)
+
+    merged_sbom = syft_sbom | {"components": unwrap_from_cdx(merged_components)}
+    _merge_tools_metadata(merged_sbom, cachi2_sbom)
+    return merged_sbom
+
+
 def merge_sboms(cachi2_sbom_path: str, syft_sbom_path: str) -> str:
     """Merge Cachi2 components into the Syft SBOM while removing duplicates."""
     with open(cachi2_sbom_path) as file:
@@ -233,15 +244,8 @@ def merge_sboms(cachi2_sbom_path: str, syft_sbom_path: str) -> str:
     with open(syft_sbom_path) as file:
         syft_sbom = json.load(file)
 
-    cachi2_components = wrap_as_cdx(cachi2_sbom["components"])
-    syft_components = wrap_as_cdx(syft_sbom.get("components", []))
-    merged = merge_components(cachi2_components, syft_components)
-
-    syft_sbom["components"] = unwrap_from_cdx(merged)
-
-    _merge_tools_metadata(syft_sbom, cachi2_sbom)
-
-    return json.dumps(syft_sbom, indent=2)
+    merged_sbom = merge_cyclonedx_sboms(cachi2_sbom, syft_sbom)
+    return json.dumps(merged_sbom, indent=2)
 
 
 if __name__ == "__main__":
