@@ -20,6 +20,7 @@ class SBOMItem(Protocol):
     def name(self) -> str: ...
     def version(self) -> str: ...
     def purl(self) -> PackageURL | None: ...
+    def all_purls(self) -> list[PackageURL]: ...
 
 
 @dataclass
@@ -36,6 +37,10 @@ class CDXComponent:
         if purl_str := self.data.get("purl"):
             return try_parse_purl(purl_str)
         return None
+
+    def all_purls(self) -> list[PackageURL]:
+        purl = self.purl()
+        return [purl] if purl else []
 
 
 def wrap_as_cdx(items: list[dict[str, Any]]) -> list[CDXComponent]:
@@ -60,12 +65,24 @@ class SPDXPackage:
         return self.data.get("versionInfo") or ""
 
     def purl(self) -> PackageURL | None:
+        purls = self.all_purls()
+        if len(purls) > 1:
+            self._verify_purl_similarity(purls)
+        return purls[0] if purls else None
+
+    def all_purls(self) -> list[PackageURL]:
         purls = [
             ref["referenceLocator"] for ref in self.data.get("externalRefs") or [] if ref["referenceType"] == "purl"
         ]
-        if len(purls) > 1:
-            raise ValueError(f"Found {len(purls)} for a single SPDX package, this is unsupported: {purls}")
-        return try_parse_purl(purls[0]) if purls else None
+        return list(filter(None, map(try_parse_purl, purls)))
+
+    def _verify_purl_similarity(self, purls: list[PackageURL]) -> None:
+        # Verify that the purls for a single package are "similar enough" for the purposes of this script.
+        # In practice, that means they need to be identical except for the qualifiers.
+        # Beyond that, we'll trust cachi2 and syft not to group purls for unrelated packages.
+        less_detailed_purls = set(purl._replace(qualifiers=None).to_string() for purl in purls)
+        if len(less_detailed_purls) != 1:
+            raise ValueError(f"The purls for an SPDX package are too different: {sorted(less_detailed_purls)}")
 
 
 def wrap_as_spdx(items: list[dict[str, Any]]) -> list[SPDXPackage]:
@@ -110,12 +127,12 @@ def _is_cachi2_non_registry_dependency(component: SBOMItem) -> bool:
 
     Note that this function is only applicable for PyPI or NPM components.
     """
-    purl = component.purl()
-    if not purl:
-        return False
 
-    qualifiers = purl.qualifiers or {}
-    return purl.type in ("pypi", "npm") and ("vcs_url" in qualifiers or "download_url" in qualifiers)
+    def is_external(purl: PackageURL) -> bool:
+        qualifiers = purl.qualifiers or {}
+        return purl.type in ("pypi", "npm") and ("vcs_url" in qualifiers or "download_url" in qualifiers)
+
+    return any(map(is_external, component.all_purls()))
 
 
 def _unique_key_cachi2(component: SBOMItem) -> str:
