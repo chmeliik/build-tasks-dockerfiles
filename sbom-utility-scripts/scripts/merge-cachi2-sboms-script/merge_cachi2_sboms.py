@@ -3,7 +3,7 @@ import json
 from argparse import ArgumentParser
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Protocol, Sequence
+from typing import Any, Callable, Literal, Protocol, Sequence
 from urllib.parse import quote_plus
 
 from packageurl import PackageURL
@@ -336,6 +336,15 @@ def merge_spdx_sboms(cachi2_sbom: dict[str, Any], syft_sbom: dict[str, Any]) -> 
     return merged_sbom
 
 
+def detect_sbom_type(sbom: dict[str, Any]) -> Literal["cyclonedx", "spdx"]:
+    if sbom.get("bomFormat") == "CycloneDX":
+        return "cyclonedx"
+    elif sbom.get("spdxVersion"):
+        return "spdx"
+    else:
+        raise ValueError("Unknown SBOM format")
+
+
 def merge_sboms(cachi2_sbom_path: str, syft_sbom_path: str) -> str:
     """Merge Cachi2 components into the Syft SBOM while removing duplicates."""
     with open(cachi2_sbom_path) as file:
@@ -344,7 +353,16 @@ def merge_sboms(cachi2_sbom_path: str, syft_sbom_path: str) -> str:
     with open(syft_sbom_path) as file:
         syft_sbom = json.load(file)
 
-    merged_sbom = merge_cyclonedx_sboms(cachi2_sbom, syft_sbom)
+    fmt = detect_sbom_type(cachi2_sbom)
+    fmt2 = detect_sbom_type(syft_sbom)
+    if fmt != fmt2:
+        raise ValueError(f"Mismatched SBOM formats; cachi2 SBOM is {fmt} but Syft SBOM is {fmt2}")
+
+    if fmt == "cyclonedx":
+        merged_sbom = merge_cyclonedx_sboms(cachi2_sbom, syft_sbom)
+    else:
+        merged_sbom = merge_spdx_sboms(cachi2_sbom, syft_sbom)
+
     return json.dumps(merged_sbom, indent=2)
 
 
