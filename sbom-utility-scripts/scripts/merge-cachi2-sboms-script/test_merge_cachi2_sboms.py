@@ -54,8 +54,6 @@ def test_merge_sboms(data_dir: Path) -> None:
     purls_taken_from_syft_sbom = get_purls(expected_sbom) - get_purls(cachi2_sbom)
     assert sorted(purls_taken_from_syft_sbom) == [
         "pkg:golang/github.com/release-engineering/retrodep@v2.1.0#v2",
-        "pkg:npm/eggs-packages/eggs@1.0.0",
-        "pkg:npm/spam-packages/spam@1.0.0",
         "pkg:rpm/rhel/basesystem@11-13.el9?arch=noarch&upstream=basesystem-11-13.el9.src.rpm&distro=rhel-9.5",
         "pkg:rpm/rhel/bash@5.1.8-9.el9?arch=x86_64&upstream=bash-5.1.8-9.el9.src.rpm&distro=rhel-9.5",
         "pkg:rpm/rhel/coreutils-single@8.32-36.el9?arch=x86_64&upstream=coreutils-8.32-36.el9.src.rpm&distro=rhel-9.5",

@@ -2,6 +2,7 @@
 import json
 from argparse import ArgumentParser
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Callable, Protocol, Sequence
 from urllib.parse import quote_plus
 
@@ -153,11 +154,22 @@ def _get_syft_component_filter(cachi_sbom_components: Sequence[SBOMItem]) -> Cal
     cachi2_non_registry_components = [
         component.name() for component in cachi_sbom_components if _is_cachi2_non_registry_dependency(component)
     ]
+    cachi2_local_paths = {
+        Path(subpath) for component in cachi_sbom_components if (purl := component.purl()) and (subpath := purl.subpath)
+    }
 
     cachi2_indexed_components = {_unique_key_cachi2(component): component for component in cachi_sbom_components}
 
     def is_duplicate_non_registry_component(component: SBOMItem) -> bool:
         return component.name() in cachi2_non_registry_components
+
+    def is_duplicate_npm_localpath_component(component: SBOMItem) -> bool:
+        purl = component.purl()
+        if not purl or purl.type != "npm":
+            return False
+        # instead of reporting path dependencies as pkg:npm/name@version?...#subpath,
+        # syft repots them as pkg:npm/subpath@version
+        return Path(purl.namespace or "", purl.name) in cachi2_local_paths
 
     def component_is_duplicated(component: SBOMItem) -> bool:
         key = _unique_key_syft(component)
@@ -165,6 +177,7 @@ def _get_syft_component_filter(cachi_sbom_components: Sequence[SBOMItem]) -> Cal
         return (
             _is_syft_local_golang_component(component)
             or is_duplicate_non_registry_component(component)
+            or is_duplicate_npm_localpath_component(component)
             or key in cachi2_indexed_components.keys()
         )
 
