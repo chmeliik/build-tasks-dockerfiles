@@ -3,13 +3,22 @@ import json
 from argparse import ArgumentParser
 from dataclasses import dataclass
 from typing import Any, Callable, Protocol, Sequence
-from urllib.parse import quote_plus, urlsplit
+from urllib.parse import quote_plus
+
+from packageurl import PackageURL
+
+
+def try_parse_purl(s: str) -> PackageURL | None:
+    try:
+        return PackageURL.from_string(s)
+    except ValueError:
+        return None
 
 
 class SBOMItem(Protocol):
     def name(self) -> str: ...
     def version(self) -> str: ...
-    def purl(self) -> str: ...
+    def purl(self) -> PackageURL | None: ...
 
 
 @dataclass
@@ -22,8 +31,10 @@ class CDXComponent:
     def version(self) -> str:
         return self.data.get("version") or ""
 
-    def purl(self) -> str:
-        return self.data.get("purl") or ""
+    def purl(self) -> PackageURL | None:
+        if purl_str := self.data.get("purl"):
+            return try_parse_purl(purl_str)
+        return None
 
 
 def wrap_as_cdx(items: list[dict[str, Any]]) -> list[CDXComponent]:
@@ -41,9 +52,10 @@ def _is_syft_local_golang_component(component: SBOMItem) -> bool:
     Local replacements are reported in a very different way by Cachi2, which is why the same
     reports by Syft should be removed.
     """
-    return component.purl().startswith("pkg:golang") and (
-        component.name().startswith(".") or component.version() == "(devel)"
-    )
+    purl = component.purl()
+    if not purl or purl.type != "golang":
+        return False
+    return component.name().startswith(".") or component.version() == "(devel)"
 
 
 def _is_cachi2_non_registry_dependency(component: SBOMItem) -> bool:
@@ -60,10 +72,11 @@ def _is_cachi2_non_registry_dependency(component: SBOMItem) -> bool:
     Note that this function is only applicable for PyPI or NPM components.
     """
     purl = component.purl()
+    if not purl:
+        return False
 
-    return (purl.startswith("pkg:pypi") or purl.startswith("pkg:npm")) and (
-        "vcs_url=" in purl or "download_url=" in purl
-    )
+    qualifiers = purl.qualifiers or {}
+    return purl.type in ("pypi", "npm") and ("vcs_url" in qualifiers or "download_url" in qualifiers)
 
 
 def _unique_key_cachi2(component: SBOMItem) -> str:
@@ -74,8 +87,10 @@ def _unique_key_cachi2(component: SBOMItem) -> str:
 
     See https://github.com/package-url/purl-spec/tree/master#purl for more info on purls.
     """
-    url = urlsplit(component.purl())
-    return url.scheme + ":" + url.path
+    purl = component.purl()
+    if not purl:
+        raise ValueError(f"cachi2 component with no purl? name={component.name()}, version={component.version()}")
+    return purl._replace(qualifiers=None, subpath=None).to_string()
 
 
 def _unique_key_syft(component: SBOMItem) -> str:
@@ -89,21 +104,19 @@ def _unique_key_syft(component: SBOMItem) -> str:
 
     If a Syft component lacks a purl (e.g. type OS), we'll use its name and version instead.
     """
-    if not component.purl():
+    purl = component.purl()
+    if not purl:
         return component.name() + "@" + component.version()
 
-    if "@" in component.purl():
-        name, version = component.purl().split("@")
+    name = purl.name
+    if purl.type == "pypi":
+        name = name.lower()
 
-        if name.startswith("pkg:pypi"):
-            name = name.lower()
+    version = purl.version
+    if purl.type == "golang" and version:
+        version = quote_plus(version)
 
-        if name.startswith("pkg:golang"):
-            version = quote_plus(version)
-
-        return f"{name}@{version}"
-    else:
-        return component.purl()
+    return purl._replace(name=name, version=version).to_string()
 
 
 def _get_syft_component_filter(cachi_sbom_components: Sequence[SBOMItem]) -> Callable[[SBOMItem], bool]:
