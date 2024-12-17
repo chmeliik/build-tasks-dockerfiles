@@ -53,10 +53,6 @@ def test_merge_sboms(data_dir: Path) -> None:
 
     purls_taken_from_syft_sbom = get_purls(expected_sbom) - get_purls(cachi2_sbom)
     assert sorted(purls_taken_from_syft_sbom) == [
-        "pkg:golang/github.com/cachito-testing/gomod-pandemonium@v0.0.0#terminaltor",
-        "pkg:golang/github.com/cachito-testing/gomod-pandemonium@v0.0.0#weird",
-        "pkg:golang/github.com/cachito-testing/retrodep@v2.1.1#v2",
-        "pkg:golang/github.com/onsi/ginkgo@v2.9.2#v2",
         "pkg:golang/github.com/release-engineering/retrodep@v2.1.0#v2",
         "pkg:npm/eggs-packages/eggs@1.0.0",
         "pkg:npm/spam-packages/spam@1.0.0",

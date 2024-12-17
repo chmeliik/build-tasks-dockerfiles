@@ -45,6 +45,12 @@ def unwrap_from_cdx(items: list[CDXComponent]) -> list[dict[str, Any]]:
     return [c.data for c in items]
 
 
+def _subpath_is_version(subpath: str) -> bool:
+    # pkg:golang/github.com/cachito-testing/gomod-pandemonium@v0.0.0#terminaltor -> subpath is a subpath
+    # pkg:golang/github.com/cachito-testing/retrodep@v2.1.1#v2 -> subpath is a version. Thanks, Syft.
+    return subpath.startswith("v") and subpath.removeprefix("v").isdecimal()
+
+
 def _is_syft_local_golang_component(component: SBOMItem) -> bool:
     """
     Check if a Syft Golang reported component is a local replacement.
@@ -55,6 +61,8 @@ def _is_syft_local_golang_component(component: SBOMItem) -> bool:
     purl = component.purl()
     if not purl or purl.type != "golang":
         return False
+    if (subpath := purl.subpath) and not _subpath_is_version(subpath):
+        return True
     return component.name().startswith(".") or component.version() == "(devel)"
 
 
@@ -109,14 +117,21 @@ def _unique_key_syft(component: SBOMItem) -> str:
         return component.name() + "@" + component.version()
 
     name = purl.name
+    version = purl.version
+    subpath = purl.subpath
+
     if purl.type == "pypi":
         name = name.lower()
 
-    version = purl.version
-    if purl.type == "golang" and version:
-        version = quote_plus(version)
+    if purl.type == "golang":
+        if version:
+            version = quote_plus(version)
+        if subpath and _subpath_is_version(subpath):
+            # put the module version where it belongs (in the module name)
+            name = f"{name}/{subpath}"
+            subpath = None
 
-    return purl._replace(name=name, version=version).to_string()
+    return purl._replace(name=name, version=version, subpath=subpath).to_string()
 
 
 def _get_syft_component_filter(cachi_sbom_components: Sequence[SBOMItem]) -> Callable[[SBOMItem], bool]:
