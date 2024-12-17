@@ -41,14 +41,14 @@ def get_purls(sbom: dict[str, Any]) -> set[str]:
 
 
 def test_merge_sboms(data_dir: Path) -> None:
-    result = merge_sboms(f"{data_dir}/cachi2.bom.json", f"{data_dir}/syft.bom.json")
+    result = merge_sboms(f"{data_dir}/cachi2.cyclonedx.bom.json", f"{data_dir}/syft.cyclonedx.bom.json")
 
-    with open(f"{data_dir}/merged.bom.json") as file:
+    with open(f"{data_dir}/merged.cyclonedx.bom.json") as file:
         expected_sbom = json.load(file)
 
     assert json.loads(result) == expected_sbom
 
-    with open(f"{data_dir}/cachi2.bom.json") as f:
+    with open(f"{data_dir}/cachi2.cyclonedx.bom.json") as f:
         cachi2_sbom = json.load(f)
 
     purls_taken_from_syft_sbom = get_purls(expected_sbom) - get_purls(cachi2_sbom)
