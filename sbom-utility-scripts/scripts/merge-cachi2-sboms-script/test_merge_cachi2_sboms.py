@@ -40,15 +40,16 @@ def get_purls(sbom: dict[str, Any]) -> set[str]:
     return {component["purl"] for component in sbom["components"]}
 
 
-def test_merge_sboms(data_dir: Path) -> None:
-    result = merge_sboms(f"{data_dir}/cachi2.cyclonedx.bom.json", f"{data_dir}/syft.cyclonedx.bom.json")
+@pytest.mark.parametrize("sbom_type", ["cyclonedx", "spdx"])
+def test_merge_sboms(data_dir: Path, sbom_type: str) -> None:
+    result = merge_sboms(f"{data_dir}/cachi2.{sbom_type}.bom.json", f"{data_dir}/syft.{sbom_type}.bom.json")
 
-    with open(f"{data_dir}/merged.cyclonedx.bom.json") as file:
+    with open(f"{data_dir}/merged.{sbom_type}.bom.json") as file:
         expected_sbom = json.load(file)
 
     assert json.loads(result) == expected_sbom
 
-    with open(f"{data_dir}/cachi2.cyclonedx.bom.json") as f:
+    with open(f"{data_dir}/cachi2.{sbom_type}.bom.json") as f:
         cachi2_sbom = json.load(f)
 
     purls_taken_from_syft_sbom = get_purls(expected_sbom) - get_purls(cachi2_sbom)
